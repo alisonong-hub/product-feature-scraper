@@ -385,14 +385,16 @@ cfg_col1, cfg_col2 = st.columns(2)
 with cfg_col1:
     brand_name = st.text_input(
         "Brand name",
-        value="K18",
+        value="",
+        placeholder="e.g. K18",
         help="Used to name the output file.",
     )
 
 with cfg_col2:
     store_url = st.text_input(
         "Store URL",
-        value="https://k18hair.com.au",
+        value="",
+        placeholder="e.g. https://k18hair.com.au",
         help="The brand's website homepage. The scraper checks if it's running Shopify automatically.",
     )
 
@@ -405,7 +407,8 @@ st.markdown(
 st.caption("One per line — copy the exact header name from the product page (e.g. how to use, ingredients).")
 sections_raw = st.text_area(
     label="Sections to extract",
-    value="how to use\nkey benefits\ningredients\nmore to know",
+    value="",
+    placeholder="how to use\nkey benefits\ningredients\nmore to know",
     height=120,
     label_visibility="collapsed",
 )
