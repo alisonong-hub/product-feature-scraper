@@ -60,7 +60,11 @@ class ProductScraper:
         return self._is_shopify
 
     def platform_label(self):
-        return "Shopify" if self.is_shopify else "Non-Shopify (Jina mode)"
+        if self.is_shopify:
+            if self._load_shopify_catalogue():
+                return "Shopify"
+            return "Shopify (search mode — products.json unavailable)"
+        return "Non-Shopify (Jina mode)"
 
     def _detect_shopify(self):
         # Check 1: standard products.json endpoint
@@ -249,13 +253,17 @@ class ProductScraper:
         if not links:
             return None, None, None, "No product links found in search results"
 
+        # Prefer /products/ URLs — filter to those first, fall back to all links
+        product_links = [(t, u) for t, u in links if "/products/" in u]
+        scored_links  = product_links if product_links else links
+
         best_score, best_link = 0, None
-        for text, url in links:
+        for text, url in scored_links:
             score = self._keyword_score(search_term, text) + 0.05 * self._fuzzy_score(search_term, text)
             if score > best_score:
                 best_score, best_link = score, (text, url)
 
-        if best_link and best_score >= 0.4:
+        if best_link and best_score >= 0.3:
             return best_link[1], best_link[0], "HIGH", f"Search match ({min(best_score, 1.0):.0%})"
 
         return None, None, None, f"No confident search result (best score {min(best_score, 1.0):.0%})"
@@ -263,8 +271,19 @@ class ProductScraper:
     # ── Unified product finder ────────────────────────────────────────────────
 
     def find_product(self, search_term, upc=None, direct_url=None):
-        if self.is_shopify:
+        if self.is_shopify and self._load_shopify_catalogue():
+            # Full Shopify catalogue available — use fast in-memory matching
             return self._find_shopify_product(search_term, upc)
+        elif self.is_shopify:
+            # Shopify detected but products.json is blocked — fall back to Jina search
+            # Auto-build search URL using the store's native Shopify search endpoint
+            auto_pattern = f"{self.store_url}/search?q={{query}}&type=product"
+            config_with_search = {**self.config, "search_url_pattern": auto_pattern}
+            original_config = self.config
+            self.config = config_with_search
+            result = self._find_jina_product(search_term, upc, direct_url)
+            self.config = original_config
+            return result
         else:
             return self._find_jina_product(search_term, upc, direct_url)
 
