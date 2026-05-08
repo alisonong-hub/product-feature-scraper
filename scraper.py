@@ -8,6 +8,7 @@ import re
 import time
 import io
 from difflib import SequenceMatcher
+from urllib.parse import urlparse
 from bs4 import BeautifulSoup
 import pandas as pd
 from openpyxl import Workbook
@@ -34,7 +35,11 @@ class ProductScraper:
 
     def __init__(self, config):
         self.config    = config
-        self.store_url = config["store_url"].rstrip("/")
+        # Normalise to root domain — strip any path the user may have pasted
+        # e.g. https://amika.com/collections/all → https://amika.com
+        raw_url = config["store_url"].strip().rstrip("/")
+        parsed  = urlparse(raw_url)
+        self.store_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else raw_url
         self.session   = requests.Session()
         self.session.headers.update({
             "User-Agent": (
