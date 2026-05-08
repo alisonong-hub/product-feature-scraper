@@ -167,7 +167,8 @@ class ProductScraper:
                 best_score, best = score, p
 
         if best and best_score >= 0.65:
-            reason = f"Keyword match ({best_score:.0%})"
+            display_score = min(best_score, 1.0)
+            reason = f"Keyword match ({display_score:.0%})"
             if upc:
                 reason += f" — UPC {upc} not found in AU store (may be a US barcode)"
             return (
@@ -229,9 +230,9 @@ class ProductScraper:
                 best_score, best_link = score, (text, url)
 
         if best_link and best_score >= 0.4:
-            return best_link[1], best_link[0], "HIGH", f"Search match ({best_score:.0%})"
+            return best_link[1], best_link[0], "HIGH", f"Search match ({min(best_score, 1.0):.0%})"
 
-        return None, None, None, f"No confident search result (best score {best_score:.0%})"
+        return None, None, None, f"No confident search result (best score {min(best_score, 1.0):.0%})"
 
     # ── Unified product finder ────────────────────────────────────────────────
 
