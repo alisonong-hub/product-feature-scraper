@@ -58,8 +58,14 @@ st.markdown("""
   [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"],
   footer { display: none !important; }
 
-  /* ── Global font — targeted only, avoid overriding Streamlit icon fonts ── */
+  /* ── Global font — target Streamlit containers without breaking icon fonts ── */
   html, body { font-family: 'Wix Madefor Display', Inter, system-ui, sans-serif !important; }
+  [data-testid="stMarkdownContainer"],
+  [data-testid="stMarkdownContainer"] p,
+  [data-testid="stMarkdownContainer"] li,
+  [data-testid="stMarkdownContainer"] h1,
+  [data-testid="stMarkdownContainer"] h2,
+  [data-testid="stMarkdownContainer"] h3,
   .stMarkdown, .stMarkdown p, .stMarkdown li,
   .stTextInput input, .stTextArea textarea,
   .stButton > button, .stDownloadButton > button,
@@ -292,10 +298,10 @@ st.markdown("""
 
 st.markdown(
     f"""
-    <div class="page-hero">
-      <div class="page-hero-logo">{PATTERN_LOGO_SVG}</div>
-      <p class="page-hero-title">Product Feature Scraper</p>
-      <p class="page-hero-desc">
+    <div class="page-hero" style="text-align:center;width:100%;display:block;">
+      <div class="page-hero-logo" style="text-align:center;">{PATTERN_LOGO_SVG}</div>
+      <p class="page-hero-title" style="text-align:center;display:block;font-family:'Wix Madefor Display',Inter,sans-serif;">Product Feature Scraper</p>
+      <p class="page-hero-desc" style="text-align:center;display:block;margin:0 auto;font-family:'Wix Madefor Display',Inter,sans-serif;">
         Upload a product list. Configure the brand details. then hit Run.<br>A content-ready catalogue ready in no time.
       </p>
     </div>
