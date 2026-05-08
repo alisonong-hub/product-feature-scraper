@@ -17,6 +17,27 @@ from openpyxl.utils import get_column_letter
 
 JINA_BASE = "https://r.jina.ai/"
 
+# Smart-quote and mojibake cleanup map
+_CHAR_FIX = str.maketrans({
+    "‘": "'", "’": "'",   # ' '
+    "“": '"', "”": '"',   # " "
+    "–": "-", "—": "-",   # – —
+    "…": "...",                # …
+    "â": "",                   # mojibake prefix
+    "�": "",                   # replacement char
+})
+
+def _clean_text(text: str) -> str:
+    """Normalise smart quotes, strip mojibake artefacts."""
+    if not text:
+        return text
+    # First try to fix Windows-1252 mojibake encoded as latin-1
+    try:
+        text = text.encode("latin-1").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        pass
+    return text.translate(_CHAR_FIX).strip()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SCRAPER CLASS
@@ -98,29 +119,64 @@ class ProductScraper:
 
     # ── Jina AI Reader ────────────────────────────────────────────────────────
 
-    def _fetch_via_jina(self, url):
-        resp = self.session.get(
-            JINA_BASE + url,
-            timeout=30,
-            headers={"Accept": "text/markdown", "X-No-Cache": "true"},
-        )
-        resp.raise_for_status()
-        return resp.text
+    def _fetch_via_jina(self, url, retries=2):
+        last_err = None
+        for attempt in range(retries + 1):
+            try:
+                resp = self.session.get(
+                    JINA_BASE + url,
+                    timeout=45,
+                    headers={"Accept": "text/markdown", "X-No-Cache": "true"},
+                )
+                resp.raise_for_status()
+                return resp.text
+            except Exception as e:
+                last_err = e
+                if attempt < retries:
+                    time.sleep(3)
+        raise last_err
 
     def _parse_sections_from_markdown(self, markdown):
+        """
+        Parse markdown into sections keyed by header text.
+        Recognises both # Markdown headers AND short plain-text labels
+        (e.g. "how to use?" or "ingredients" that appear on some Shopify sites
+        as styled text rather than proper headings).
+        """
         sections, current_key, lines = {}, None, []
+
+        def _is_plain_label(line):
+            """True if line looks like a section label (short, no special leading chars)."""
+            stripped = line.strip()
+            if not stripped or len(stripped) > 60:
+                return False
+            if stripped.startswith(("#", "*", "-", ">", "!", "[", "|", "http")):
+                return False
+            # Must contain mostly letters (not a paragraph sentence)
+            alpha = sum(c.isalpha() for c in stripped)
+            return alpha / max(len(stripped), 1) > 0.5
+
         for line in markdown.split("\n"):
-            h = re.match(r"^#{1,4}\s+(.+)$", line)
+            h = re.match(r"^#{1,6}\s+(.+)$", line)
             if h:
                 if current_key:
                     sections[current_key] = "\n".join(lines).strip()
-                current_key = h.group(1).strip().lower().rstrip(":")
+                current_key = re.sub(r"\*+", "", h.group(1)).strip().lower().rstrip(":").strip()
+                lines = []
+            elif _is_plain_label(line) and not lines:
+                # Plain-text label at the start of a new section (nothing collected yet
+                # under current key means the previous header was empty — commit it)
+                if current_key:
+                    sections[current_key] = "\n".join(lines).strip()
+                current_key = line.strip().lower().rstrip(":").strip()
                 lines = []
             elif current_key is not None:
                 lines.append(line)
+
         if current_key and lines:
             sections[current_key] = "\n".join(lines).strip()
-        return sections
+
+        return {k: _clean_text(v) for k, v in sections.items()}
 
     # ── Scoring helpers ───────────────────────────────────────────────────────
 
@@ -253,20 +309,49 @@ class ProductScraper:
         if not links:
             return None, None, None, "No product links found in search results"
 
-        # Prefer /products/ URLs — filter to those first, fall back to all links
-        product_links = [(t, u) for t, u in links if "/products/" in u]
-        scored_links  = product_links if product_links else links
+        def _title_to_slug(text):
+            """Convert a product title to a URL-slug for comparison."""
+            t = text.lower()
+            t = re.sub(r"\b\d+\s*(ml|oz|g|l|fl)\b", "", t)   # strip sizes (50ml, 6.7oz)
+            t = re.sub(r"[^a-z0-9\s]", " ", t)
+            t = re.sub(r"\s+", "-", t.strip()).strip("-")
+            return t
 
-        best_score, best_link = 0, None
-        for text, url in scored_links:
-            score = self._keyword_score(search_term, text) + 0.05 * self._fuzzy_score(search_term, text)
-            if score > best_score:
-                best_score, best_link = score, (text, url)
+        def _slug_from_url(url):
+            """Extract the product handle from a /products/{handle} URL."""
+            m = re.search(r"/products/([^/?#]+)", url)
+            return m.group(1) if m else ""
 
-        if best_link and best_score >= 0.3:
-            return best_link[1], best_link[0], "HIGH", f"Search match ({min(best_score, 1.0):.0%})"
+        input_slug = _title_to_slug(search_term)
 
-        return None, None, None, f"No confident search result (best score {min(best_score, 1.0):.0%})"
+        # Score every /products/ URL by fuzzy-matching input slug against URL slug
+        seen = {}
+        for text, url in links:
+            if "/products/" not in url:
+                continue
+            url_slug = _slug_from_url(url)
+            if not url_slug:
+                continue
+            # Primary: slug similarity (clean, no noise)
+            slug_score = self._fuzzy_score(input_slug, url_slug)
+            # Secondary: keyword overlap as tiebreaker
+            kw_score   = self._keyword_score(search_term, url_slug.replace("-", " "))
+            score      = 0.8 * slug_score + 0.2 * kw_score
+            if url not in seen or score > seen[url][0]:
+                seen[url] = (score, text)
+
+        if not seen:
+            return None, None, None, "No product links found in search results — add a direct URL in column C"
+
+        best_score, best_text, best_url = max(
+            [(s, t, u) for u, (s, t) in seen.items()], key=lambda x: x[0]
+        )
+        best_slug = _slug_from_url(best_url)
+
+        if best_score >= 0.65:
+            return best_url, best_text, "HIGH", f"Slug match ({min(best_score, 1.0):.0%})"
+
+        return None, None, None, f"No confident match (best slug: '{best_slug}' at {min(best_score, 1.0):.0%}) — add a direct URL in column C"
 
     # ── Unified product finder ────────────────────────────────────────────────
 
@@ -370,7 +455,8 @@ class ProductScraper:
             process(child)
 
         result = "\n".join(lines).strip()
-        return result if result else element.get_text(separator="\n", strip=True)
+        raw = result if result else element.get_text(separator="\n", strip=True)
+        return _clean_text(raw)
 
     def _get_sections(self, url):
         """Return (sections_dict, method_label). Tries HTML first for Shopify, Jina otherwise."""
