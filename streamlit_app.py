@@ -395,12 +395,89 @@ with cfg_col2:
         "Store URL",
         value="",
         placeholder="e.g. https://k18hair.com.au",
-        help="The brand's website homepage. The scraper checks if it's running Shopify automatically.",
+        help="Paste the brand's website URL and click Check Site.",
     )
+
+# ── Site check ────────────────────────────────────────────────────────────────
+if "site_check_url"    not in st.session_state: st.session_state.site_check_url    = ""
+if "site_is_shopify"   not in st.session_state: st.session_state.site_is_shopify   = None
+if "site_search_url"   not in st.session_state: st.session_state.site_search_url   = ""
+
+check_col, status_col = st.columns([1, 4])
+
+with check_col:
+    check_clicked = st.button(
+        "🔍 Check site",
+        disabled=not store_url,
+        use_container_width=True,
+    )
+
+if check_clicked and store_url:
+    with st.spinner("Checking site…"):
+        _scraper_tmp = ProductScraper({
+            "store_url": store_url,
+            "sections": [],
+            "brand_name": brand_name or "check",
+        })
+        _is_shopify = _scraper_tmp.is_shopify
+        _has_catalogue = bool(_scraper_tmp._load_shopify_catalogue()) if _is_shopify else False
+
+    st.session_state.site_check_url  = store_url
+    st.session_state.site_is_shopify = _is_shopify
+    # Auto-suggest search URL for non-Shopify or Shopify with blocked catalogue
+    if not _is_shopify or not _has_catalogue:
+        from urllib.parse import urlparse as _up
+        _p = _up(store_url.strip())
+        _root = f"{_p.scheme}://{_p.netloc}" if _p.netloc else store_url.strip().rstrip("/")
+        st.session_state.site_search_url = f"{_root}/search?q={{query}}"
+    else:
+        st.session_state.site_search_url = ""
+
+with status_col:
+    if st.session_state.site_check_url == store_url and st.session_state.site_is_shopify is not None:
+        if st.session_state.site_is_shopify and not st.session_state.site_search_url:
+            st.success("✅ Shopify store detected — ready to scrape")
+        elif st.session_state.site_is_shopify:
+            st.warning("⚠️ Shopify store detected but product catalogue is restricted. A search URL has been pre-filled below — verify it's correct before running.")
+        else:
+            st.warning("⚠️ Non-Shopify site detected. A search URL has been pre-filled below — verify it's correct before running.")
+    elif store_url and st.session_state.site_check_url != store_url:
+        st.caption("Click **Check site** to verify this URL before running.")
+
+# ── Search URL (shown when needed) ────────────────────────────────────────────
+_show_search = (
+    st.session_state.site_check_url == store_url
+    and st.session_state.site_search_url
+)
+
+if _show_search:
+    st.markdown(
+        '<p style="font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:1.5px;'
+        'color:#C4D3E3;margin:16px 0 4px 0;font-family:\'Wix Madefor Display\',Inter,sans-serif;">'
+        'Search URL</p>',
+        unsafe_allow_html=True,
+    )
+    st.caption("We've pre-filled this based on common search patterns. Edit if the site uses a different format.")
+    search_url_pattern = st.text_input(
+        "Search URL pattern",
+        value=st.session_state.site_search_url,
+        label_visibility="collapsed",
+    )
+else:
+    # Hidden — only visible via manual expander fallback
+    with st.expander("Advanced settings"):
+        st.caption(
+            "Only needed for non-Shopify sites. Click **Check site** above to auto-detect and pre-fill this."
+        )
+        search_url_pattern = st.text_input(
+            "Search URL pattern (optional)",
+            value=st.session_state.site_search_url,
+            placeholder="https://brand.com/search?q={query}",
+        )
 
 st.markdown(
     '<p style="font-size:12px;font-weight:500;text-transform:uppercase;letter-spacing:1.5px;'
-    'color:#C4D3E3;margin:0 0 4px 0;font-family:\'Wix Madefor Display\',Inter,sans-serif;">'
+    'color:#C4D3E3;margin:16px 0 4px 0;font-family:\'Wix Madefor Display\',Inter,sans-serif;">'
     'Sections to extract</p>',
     unsafe_allow_html=True,
 )
@@ -413,18 +490,6 @@ sections_raw = st.text_area(
     label_visibility="collapsed",
 )
 sections = [s.strip() for s in sections_raw.splitlines() if s.strip()]
-
-with st.expander("Advanced settings"):
-    st.caption(
-        "Only needed for non-Shopify sites where you don't have direct product URLs in column C. "
-        "Paste the site's search URL and replace the query part with {query} — "
-        "e.g. https://brand.com/search?q={query}"
-    )
-    search_url_pattern = st.text_input(
-        "Search URL pattern (optional)",
-        value="",
-        placeholder="https://brand.com/search?q={query}",
-    )
 
 run_col, _ = st.columns([1, 4])
 run_button = run_col.button(
