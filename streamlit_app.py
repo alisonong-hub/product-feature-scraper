@@ -50,6 +50,8 @@ st.markdown(
 
 st.markdown("""
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Wix+Madefor+Display:wght@400;500;600;700;800&display=swap');
+
   /* ── Hide Streamlit chrome ── */
   header[data-testid="stHeader"], #MainMenu,
   [data-testid="stToolbar"], [data-testid="stDecoration"],
@@ -261,19 +263,23 @@ st.markdown("""
 
   /* ── Page hero (centred) ── */
   .page-hero {
-    text-align: center;
+    text-align: center !important;
+    display: block !important;
+    width: 100% !important;
     padding: 16px 0 32px;
   }
-  .page-hero-logo { margin-bottom: 20px; }
+  .page-hero-logo { text-align: center !important; margin-bottom: 20px; }
   .page-hero-title {
-    font-family: 'Wix Madefor Display', Inter, system-ui, sans-serif;
+    font-family: 'Wix Madefor Display', Inter, system-ui, sans-serif !important;
     font-size: 36px; font-weight: 600; color: #FFFFFF;
     letter-spacing: -0.5px; line-height: 42px; margin: 0 0 12px 0;
+    text-align: center !important; display: block !important;
   }
   .page-hero-desc {
-    font-family: 'Wix Madefor Display', Inter, system-ui, sans-serif;
+    font-family: 'Wix Madefor Display', Inter, system-ui, sans-serif !important;
     font-size: 16px; font-weight: 400; color: #C4D3E3;
     line-height: 26px; margin: 0 auto; max-width: 520px;
+    text-align: center !important; display: block !important;
   }
 
 </style>
