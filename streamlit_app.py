@@ -262,7 +262,7 @@ st.markdown("""
   /* ── Page hero (centred) ── */
   .page-hero {
     text-align: center;
-    padding: 48px 0 36px;
+    padding: 16px 0 32px;
   }
   .page-hero-logo { margin-bottom: 20px; }
   .page-hero-title {
@@ -290,7 +290,7 @@ st.markdown(
       <div class="page-hero-logo">{PATTERN_LOGO_SVG}</div>
       <p class="page-hero-title">Product Feature Scraper</p>
       <p class="page-hero-desc">
-        Upload a product list. Configure the brand details. then hit Run. A content-ready catalogue ready in no time.
+        Upload a product list. Configure the brand details. then hit Run.<br>A content-ready catalogue ready in no time.
       </p>
     </div>
     """,
