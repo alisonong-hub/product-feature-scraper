@@ -25,7 +25,7 @@ st.set_page_config(
 # PATTERN LOGO SVG
 # ─────────────────────────────────────────────────────────────────────────────
 
-PATTERN_LOGO_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 675 135.7" height="26" aria-label="Pattern">
+PATTERN_LOGO_SVG = """<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 675 135.7" height="48" aria-label="Pattern">
 <g>
   <path fill="#009BFF" d="M81.55,0.99L0.99,81.55c-1.32,1.32-1.32,3.47,0,4.8l19.84,19.84c1.32,1.32,3.47,1.32,4.8,0l80.56-80.56c1.32-1.32,1.32-3.47,0-4.8L86.35,0.99C85.02-0.33,82.88-0.33,81.55,0.99z"/>
   <path fill="#009BFF" d="M114.73,34.17L67.37,81.54c-1.32,1.32-1.32,3.47,0,4.8l19.84,19.84c1.32,1.32,3.47,1.32,4.8,0l47.36-47.36c1.32-1.32,1.32-3.47,0-4.8l-19.84-19.84C118.2,32.85,116.05,32.85,114.73,34.17z"/>
@@ -56,8 +56,13 @@ st.markdown("""
   [data-testid="collapsedControl"], [data-testid="stSidebarCollapsedControl"],
   footer { display: none !important; }
 
-  /* ── Global font ── */
-  html, body, [class*="css"], p, li, span, div, label, input, textarea, button {
+  /* ── Global font — targeted only, avoid overriding Streamlit icon fonts ── */
+  html, body { font-family: 'Wix Madefor Display', Inter, system-ui, sans-serif !important; }
+  .stMarkdown, .stMarkdown p, .stMarkdown li,
+  .stTextInput input, .stTextArea textarea,
+  .stButton > button, .stDownloadButton > button,
+  [data-testid="stMetricLabel"], [data-testid="stMetricValue"],
+  [data-testid="stCaptionContainer"] p {
     font-family: 'Wix Madefor Display', Inter, system-ui, sans-serif !important;
     -webkit-font-smoothing: antialiased;
   }
@@ -88,7 +93,10 @@ st.markdown("""
   h3 { font-size: 30px !important; font-weight: 600 !important; letter-spacing: -0.5px !important; line-height: 34px !important; }
 
   /* ── Body text ── */
-  p, li { font-size: 16px !important; font-weight: 400 !important; line-height: 24px !important; color: #FFFFFF; }
+  .stMarkdown p, .stMarkdown li {
+    font-size: 16px !important; font-weight: 400 !important;
+    line-height: 24px !important; color: #FFFFFF;
+  }
   .stCaption, [data-testid="stCaptionContainer"] p, small {
     font-size: 13px !important; color: #C4D3E3 !important;
   }
@@ -251,14 +259,22 @@ st.markdown("""
   /* ── Spinner ── */
   .stSpinner > div { border-top-color: #770BFF !important; }
 
-  /* ── Page header ── */
-  .page-header { display: flex; align-items: center; gap: 16px; margin-bottom: 6px; padding-top: 4px; }
-  .page-title {
-    font-family: 'Wix Madefor Display', Inter, system-ui, sans-serif;
-    font-size: 30px; font-weight: 600; color: #FFFFFF;
-    letter-spacing: -0.5px; line-height: 34px; margin: 0;
+  /* ── Page hero (centred) ── */
+  .page-hero {
+    text-align: center;
+    padding: 48px 0 36px;
   }
-  .page-divider { width: 1px; height: 26px; background: rgba(196,211,227,0.2); display: inline-block; }
+  .page-hero-logo { margin-bottom: 20px; }
+  .page-hero-title {
+    font-family: 'Wix Madefor Display', Inter, system-ui, sans-serif;
+    font-size: 36px; font-weight: 600; color: #FFFFFF;
+    letter-spacing: -0.5px; line-height: 42px; margin: 0 0 12px 0;
+  }
+  .page-hero-desc {
+    font-family: 'Wix Madefor Display', Inter, system-ui, sans-serif;
+    font-size: 16px; font-weight: 400; color: #C4D3E3;
+    line-height: 26px; margin: 0 auto; max-width: 520px;
+  }
 
 </style>
 """, unsafe_allow_html=True)
@@ -270,16 +286,13 @@ st.markdown("""
 
 st.markdown(
     f"""
-    <div class="page-header">
-      {PATTERN_LOGO_SVG}
-      <span class="page-divider"></span>
-      <p class="page-title">Product Feature Scraper</p>
+    <div class="page-hero">
+      <div class="page-hero-logo">{PATTERN_LOGO_SVG}</div>
+      <p class="page-hero-title">Product Feature Scraper</p>
+      <p class="page-hero-desc">
+        Upload a product list. Configure the brand details. then hit Run. A content-ready catalogue ready in no time.
+      </p>
     </div>
-    <p style="font-size:16px;font-weight:400;color:#C4D3E3;line-height:24px;margin:10px 0 0;
-              font-family:'Wix Madefor Display',Inter,sans-serif;">
-      Upload your product list, configure the brand details, then hit Run.
-      Works with Shopify stores and any other brand website.
-    </p>
     """,
     unsafe_allow_html=True,
 )
