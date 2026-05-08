@@ -58,13 +58,34 @@ class ProductScraper:
         return "Shopify" if self.is_shopify else "Non-Shopify (Jina mode)"
 
     def _detect_shopify(self):
+        # Check 1: standard products.json endpoint
         try:
             resp = self.session.get(
                 f"{self.store_url}/products.json?limit=1", timeout=8
             )
-            return resp.status_code == 200 and "products" in resp.json()
+            if resp.status_code == 200 and "products" in resp.json():
+                return True
         except Exception:
-            return False
+            pass
+
+        # Check 2: HTML fingerprint — some Shopify stores block products.json
+        # but still load cdn.shopify.com assets in their page source
+        try:
+            resp = self.session.get(self.store_url, timeout=10)
+            html = resp.text.lower()
+            shopify_signals = [
+                "cdn.shopify.com",
+                "shopify.com/s/",
+                "myshopify.com",
+                "shopify.theme",
+                '"shopify"',
+            ]
+            if any(sig in html for sig in shopify_signals):
+                return True
+        except Exception:
+            pass
+
+        return False
 
     # ── Jina AI Reader ────────────────────────────────────────────────────────
 
