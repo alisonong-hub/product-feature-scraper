@@ -1,5 +1,5 @@
 """
-scraper.py — Core scraping logic for the Product Feature Scraper.
+scraper.py - Core scraping logic for the Product Feature Scraper.
 Imported by streamlit_app.py. No UI or file I/O here.
 """
 
@@ -17,25 +17,43 @@ from openpyxl.utils import get_column_letter
 
 JINA_BASE = "https://r.jina.ai/"
 
-# Smart-quote and mojibake cleanup map
+# Smart-quote and mojibake cleanup -- use ordinal keys, chr() values to stay ASCII-safe
 _CHAR_FIX = str.maketrans({
-    "‘": "'", "’": "'",   # ' '
-    "“": '"', "”": '"',   # " "
-    "–": "-", "—": "-",   # – —
-    "…": "...",                # …
-    "â": "",                   # mojibake prefix
-    "�": "",                   # replacement char
+    0x2018: chr(39),    # left single quote -> '
+    0x2019: chr(39),    # right single quote -> '
+    0x201c: chr(34),    # left double quote -> "
+    0x201d: chr(34),    # right double quote -> "
+    0x2013: chr(45),    # en dash -> -
+    0x2014: chr(45),    # em dash -> -
+    0xfffd: None,       # replacement char -> remove
 })
 
+# Mojibake sequences produced when UTF-8 bytes are misread as latin-1
+# e.g. the en dash U+2013 (bytes E2 80 93) becomes the 3-char string "\xe2\x80\x93"
+# which, when read as latin-1, appears as "â\x80\x93"
+_MOJIBAKE = [
+    ("\xe2\x80\x93", chr(45)),    # en dash
+    ("\xe2\x80\x94", chr(45)),    # em dash
+    ("\xe2\x80\x99", chr(39)),    # right single quote
+    ("\xe2\x80\x9c", chr(34)),    # left double quote
+    ("\xe2\x80\x9d", chr(34)),    # right double quote
+    ("\xe2\x80\xa6", "..."),      # ellipsis
+    ("\xe2\x80\x98", chr(39)),    # left single quote
+]
+
 def _clean_text(text: str) -> str:
-    """Normalise smart quotes, strip mojibake artefacts."""
+    """Normalise smart quotes and fix mojibake artefacts."""
     if not text:
         return text
-    # First try to fix Windows-1252 mojibake encoded as latin-1
+    # Pass 1: fix properly UTF-8 encoded text that was decoded as latin-1
     try:
         text = text.encode("latin-1").decode("utf-8")
     except (UnicodeDecodeError, UnicodeEncodeError):
         pass
+    # Pass 2: fix any remaining mojibake byte sequences
+    for bad, good in _MOJIBAKE:
+        text = text.replace(bad, good)
+    # Pass 3: translate known Unicode punctuation to ASCII equivalents
     return text.translate(_CHAR_FIX).strip()
 
 
@@ -56,7 +74,7 @@ class ProductScraper:
 
     def __init__(self, config):
         self.config    = config
-        # Normalise to root domain — strip any path the user may have pasted
+        # Normalise to root domain - strip any path the user may have pasted
         # e.g. https://amika.com/collections/all → https://amika.com
         raw_url = config["store_url"].strip().rstrip("/")
         parsed  = urlparse(raw_url)
@@ -84,7 +102,7 @@ class ProductScraper:
         if self.is_shopify:
             if self._load_shopify_catalogue():
                 return "Shopify"
-            return "Shopify (search mode — products.json unavailable)"
+            return "Shopify (search mode - products.json unavailable)"
         return "Non-Shopify (Jina mode)"
 
     def _detect_shopify(self):
@@ -98,7 +116,7 @@ class ProductScraper:
         except Exception:
             pass
 
-        # Check 2: HTML fingerprint — some Shopify stores block products.json
+        # Check 2: HTML fingerprint - some Shopify stores block products.json
         # but still load cdn.shopify.com assets in their page source
         try:
             resp = self.session.get(self.store_url, timeout=10)
@@ -165,7 +183,7 @@ class ProductScraper:
                 lines = []
             elif _is_plain_label(line) and not lines:
                 # Plain-text label at the start of a new section (nothing collected yet
-                # under current key means the previous header was empty — commit it)
+                # under current key means the previous header was empty - commit it)
                 if current_key:
                     sections[current_key] = "\n".join(lines).strip()
                 current_key = line.strip().lower().rstrip(":").strip()
@@ -256,7 +274,7 @@ class ProductScraper:
             display_score = min(best_score, 1.0)
             reason = f"Keyword match ({display_score:.0%})"
             if upc:
-                reason += f" — UPC {upc} not found in AU store (may be a US barcode)"
+                reason += f" - UPC {upc} not found in AU store (may be a US barcode)"
             return (
                 f"{self.store_url}/products/{best['handle']}",
                 best["title"], "HIGH", reason,
@@ -268,7 +286,7 @@ class ProductScraper:
             if upc:
                 parts.append(f"UPC {upc} not in AU store")
             if kw < 0.5:
-                parts.append(f"Low keyword overlap ({kw:.0%}) — may be a bundle or US-only listing")
+                parts.append(f"Low keyword overlap ({kw:.0%}) - may be a bundle or US-only listing")
             else:
                 parts.append(f"Score {best_score:.0%} below confidence threshold")
             return (
@@ -340,7 +358,7 @@ class ProductScraper:
 
         tried = ", ".join(c.split("/products/")[-1] for c in candidates)
         return None, None, None, (
-            f"Slug construction failed (tried: {tried}) — "
+            f"Slug construction failed (tried: {tried}) - "
             "add a direct URL in column C"
         )
 
@@ -358,7 +376,7 @@ class ProductScraper:
                 "Add a product URL in column C of your input file.",
             )
 
-        # Strip volume/size suffixes before URL-encoding — many retailers
+        # Strip volume/size suffixes before URL-encoding - many retailers
         # (e.g. Sephora AU) return empty results when size info is in the query.
         query_clean = re.sub(r"\b[\d.]+\s*(ml|oz|g|l|fl|mm|cm)\b", " ", search_term, flags=re.IGNORECASE)
         query_clean = re.sub(r"[^a-z0-9\s]", " ", query_clean.lower())
@@ -387,7 +405,7 @@ class ProductScraper:
         ))
 
         if not product_urls:
-            return None, None, None, "No product links found in search results — add a direct URL in column C"
+            return None, None, None, "No product links found in search results - add a direct URL in column C"
 
         def _title_to_slug(text):
             """Convert a product title to a URL-slug for comparison."""
@@ -419,7 +437,7 @@ class ProductScraper:
                 seen[url] = score
 
         if not seen:
-            return None, None, None, "No product links found in search results — add a direct URL in column C"
+            return None, None, None, "No product links found in search results - add a direct URL in column C"
 
         best_url   = max(seen, key=seen.get)
         best_score = seen[best_url]
@@ -430,17 +448,17 @@ class ProductScraper:
         if best_score >= 0.65:
             return best_url, matched_title, "HIGH", f"Slug match ({min(best_score, 1.0):.0%})"
 
-        return None, None, None, f"No confident match (best slug: '{best_slug}' at {min(best_score, 1.0):.0%}) — add a direct URL in column C"
+        return None, None, None, f"No confident match (best slug: '{best_slug}' at {min(best_score, 1.0):.0%}) - add a direct URL in column C"
 
     # ── Unified product finder ────────────────────────────────────────────────
 
     def find_product(self, search_term, upc=None, direct_url=None):
         if self.is_shopify and self._load_shopify_catalogue():
-            # Full Shopify catalogue available — use fast in-memory matching
+            # Full Shopify catalogue available - use fast in-memory matching
             return self._find_shopify_product(search_term, upc)
         elif self.is_shopify:
             # Shopify detected but products.json is blocked.
-            # Step 1: try slug construction — fast, no search page needed.
+            # Step 1: try slug construction - fast, no search page needed.
             result = self._find_shopify_slug_product(search_term, upc, direct_url)
             if result[0]:
                 return result
@@ -460,12 +478,16 @@ class ProductScraper:
     def _fetch_html(self, url):
         resp = self.session.get(url, timeout=15)
         resp.raise_for_status()
-        return resp.text
+        # Return raw bytes so BeautifulSoup/lxml reads the <meta charset> tag
+        # and decodes correctly. Avoids requests guessing latin-1 and producing mojibake.
+        return resp.content
 
     def _parse_html_sections(self, html):
-        soup     = BeautifulSoup(html, "lxml")
+        # html may be bytes (from _fetch_html) or str -- handle both
+        soup = BeautifulSoup(html, "lxml")
         sections = {}
 
+        # Pass 1: look inside a configured accordion selector (e.g. K18)
         accordion = soup.select_one(self.config.get("accordion_selector", ".accordion"))
         if accordion:
             for details in accordion.find_all("details"):
@@ -487,6 +509,30 @@ class ProductScraper:
                 content     = self._extract_html_text(content_div)
                 if header:
                     sections[header.lower()] = content
+
+        # Pass 2: scan ALL <details>/<summary> on the page (loveamika.com and similar)
+        # This catches sections the accordion selector missed, including collapsed ones.
+        for details in soup.find_all("details"):
+            summary = details.find("summary")
+            if not summary:
+                continue
+            header = summary.get_text(strip=True).lower().rstrip(":").strip()
+            if not header or len(header) > 80 or header in sections:
+                continue
+            # Content = everything in <details> except the <summary>
+            content_parts = []
+            for child in details.children:
+                if child == summary:
+                    continue
+                if hasattr(child, "get_text"):
+                    t = child.get_text(separator="\n", strip=True)
+                    if t:
+                        content_parts.append(t)
+            content = _clean_text("\n".join(content_parts).strip())
+            if content:
+                sections[header] = content
+            if content:
+                sections[header] = content
 
         if not sections:
             for tag in soup.find_all(["h2", "h3", "h4", "h5", "strong"]):
@@ -542,14 +588,35 @@ class ProductScraper:
         return _clean_text(raw)
 
     def _get_sections(self, url):
-        """Return (sections_dict, method_label). Tries HTML first for Shopify, Jina otherwise."""
+        """
+        Return (sections_dict, method_label).
+        For Shopify sites: parses HTML first, then merges with Jina to fill
+        any sections that were empty (e.g. collapsed accordion panels that
+        the HTML parser can't see). Jina extracts all page text regardless
+        of accordion/visibility state, so it catches what HTML misses.
+        For non-Shopify: Jina only.
+        """
         if self.is_shopify:
+            html_sections = {}
             try:
-                sections = self._parse_html_sections(self._fetch_html(url))
-                if any(sections.values()):
-                    return sections, "HTML"
+                html_sections = self._parse_html_sections(self._fetch_html(url))
             except Exception:
-                pass  # fall through to Jina
+                pass
+
+            # Always also fetch via Jina and merge - fills collapsed sections
+            try:
+                markdown = self._fetch_via_jina(url)
+                jina_sections = self._parse_sections_from_markdown(markdown)
+                # Merge: prefer HTML values where present, fill blanks from Jina
+                merged = {**jina_sections, **{k: v for k, v in html_sections.items() if v}}
+                if any(merged.values()):
+                    method = "HTML+Jina" if any(html_sections.values()) else "Jina"
+                    return merged, method
+            except Exception:
+                pass
+
+            if any(html_sections.values()):
+                return html_sections, "HTML"
 
         markdown = self._fetch_via_jina(url)
         return self._parse_sections_from_markdown(markdown), "Jina"
@@ -652,7 +719,7 @@ def parse_input(file_obj, filename):
             if m:
                 if not upc:
                     upc = m.group(1)
-                name = UPC_RE.sub("", name).strip(" ,|–-")
+                name = UPC_RE.sub("", name).strip(" ,|--")
 
         if name and name.lower() not in ("nan", "", "none"):
             rows.append((name, upc, url))
@@ -661,7 +728,7 @@ def parse_input(file_obj, filename):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EXCEL BUILDER  (returns BytesIO — no disk writes)
+# EXCEL BUILDER  (returns BytesIO - no disk writes)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_excel(results, sections):
