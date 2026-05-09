@@ -137,13 +137,13 @@ class ProductScraper:
 
     # ── Jina AI Reader ────────────────────────────────────────────────────────
 
-    def _fetch_via_jina(self, url, retries=2):
+    def _fetch_via_jina(self, url, retries=1):
         last_err = None
         for attempt in range(retries + 1):
             try:
                 resp = self.session.get(
                     JINA_BASE + url,
-                    timeout=45,
+                    timeout=25,
                     headers={"Accept": "text/markdown", "X-No-Cache": "true"},
                 )
                 resp.raise_for_status()
@@ -151,7 +151,7 @@ class ProductScraper:
             except Exception as e:
                 last_err = e
                 if attempt < retries:
-                    time.sleep(3)
+                    time.sleep(2)
         raise last_err
 
     def _parse_sections_from_markdown(self, markdown):
@@ -310,7 +310,7 @@ class ProductScraper:
         try:
             from xml.etree import ElementTree as ET
             resp = self.session.get(
-                f"{self.store_url}/sitemap-products.xml", timeout=15
+                f"{self.store_url}/sitemap-products.xml", timeout=10
             )
             if resp.status_code == 200:
                 tree = ET.fromstring(resp.content)
@@ -376,7 +376,7 @@ class ProductScraper:
             if best_slug and best_score >= 0.45:
                 url = f"{self.store_url}/products/{best_slug}"
                 try:
-                    r = self.session.head(url, timeout=8, allow_redirects=True)
+                    r = self.session.head(url, timeout=5, allow_redirects=True)
                     if r.status_code == 200:
                         title = best_slug.replace("-", " ").title()
                         return url, title, "HIGH", f"Sitemap match ({min(best_score,1.0):.0%})"
@@ -530,7 +530,7 @@ class ProductScraper:
     # ── HTML content extraction ───────────────────────────────────────────────
 
     def _fetch_html(self, url):
-        resp = self.session.get(url, timeout=15)
+        resp = self.session.get(url, timeout=10)
         resp.raise_for_status()
         # Return raw bytes so BeautifulSoup/lxml reads the <meta charset> tag
         # and decodes correctly. Avoids requests guessing latin-1 and producing mojibake.
@@ -642,12 +642,15 @@ class ProductScraper:
     def _get_sections(self, url):
         """
         Return (sections_dict, method_label).
-        For Shopify sites: parses HTML first, then merges with Jina to fill
-        any sections that were empty (e.g. collapsed accordion panels that
-        the HTML parser can't see). Jina extracts all page text regardless
-        of accordion/visibility state, so it catches what HTML misses.
+        For Shopify sites: parses HTML first. If all requested sections are
+        found in the HTML, return immediately (fast path - no Jina needed).
+        Only calls Jina when HTML sections are missing or empty, then merges
+        results. This keeps K18-style sites fast while still filling collapsed
+        accordion sections on sites like loveamika.com.
         For non-Shopify: Jina only.
         """
+        requested = [s.lower().strip() for s in self.config.get("sections", [])]
+
         if self.is_shopify:
             html_sections = {}
             try:
@@ -655,7 +658,20 @@ class ProductScraper:
             except Exception:
                 pass
 
-            # Always also fetch via Jina and merge - fills collapsed sections
+            # Fast path: if HTML found content for every requested section, skip Jina.
+            if html_sections and requested:
+                covered = all(
+                    any(
+                        req in key or key in req or self._fuzzy_score(req, key) >= 0.6
+                        for key in html_sections
+                        if html_sections[key]
+                    )
+                    for req in requested
+                )
+                if covered:
+                    return html_sections, "HTML"
+
+            # Slow path: some sections missing - call Jina to fill gaps.
             try:
                 markdown = self._fetch_via_jina(url)
                 jina_sections = self._parse_sections_from_markdown(markdown)
