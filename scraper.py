@@ -299,70 +299,124 @@ class ProductScraper:
             reason += f" (UPC {upc} not in catalogue)"
         return None, None, None, reason
 
-    # ── Shopify slug construction (blocked catalogue fallback) ────────────────
+    # ── Shopify sitemap catalogue (blocked products.json fallback) ────────────
+
+    def _load_sitemap_catalogue(self):
+        """Fetch sitemap-products.xml and return a deduplicated list of product slugs.
+        Result is cached on self._sitemap_slugs after the first call."""
+        if hasattr(self, "_sitemap_slugs"):
+            return self._sitemap_slugs
+        slugs = []
+        try:
+            from xml.etree import ElementTree as ET
+            resp = self.session.get(
+                f"{self.store_url}/sitemap-products.xml", timeout=15
+            )
+            if resp.status_code == 200:
+                tree = ET.fromstring(resp.content)
+                ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+                seen = set()
+                for loc in tree.findall(".//sm:loc", ns):
+                    url = loc.text or ""
+                    m = re.search(r"/products/([^?#/]+)", url)
+                    if m:
+                        slug = m.group(1)
+                        if slug not in seen:
+                            seen.add(slug)
+                            slugs.append(slug)
+        except Exception:
+            pass
+        self._sitemap_slugs = slugs
+        return slugs
 
     def _find_shopify_slug_product(self, search_term, upc=None, direct_url=None):
         """
-        For Shopify stores where products.json is blocked.
-        Constructs candidate /products/{slug} URLs from the input title,
-        then fires HEAD requests to verify which one actually exists.
-        No catalogue, no search page, no Jina needed.
+        Match input title against all product slugs in the sitemap using
+        fuzzy + keyword scoring. Falls back to direct slug construction if
+        the sitemap is unavailable.
         """
         if direct_url:
             return direct_url, search_term, "HIGH", "Direct URL provided"
 
-        def _make_slug(text):
-            t = text.lower()
-            t = re.sub(r"[^a-z0-9\s]", " ", t)
-            t = re.sub(r"\s+", "-", t.strip()).strip("-")
-            return t
-
         brand = self.config.get("brand_name", "").strip().lower()
 
-        # Strip size suffix (189ml, 300ml, 6.7oz, etc.)
-        no_size = re.sub(
-            r"\b[\d.]+\s*(ml|oz|g|l|fl|mm|cm)\b", " ", search_term, flags=re.IGNORECASE
-        )
+        def _to_slug(text):
+            t = re.sub(r"\b[\d.]+\s*(ml|oz|g|l|fl|mm|cm)\b", " ", text, flags=re.IGNORECASE)
+            t = re.sub(r"[^a-z0-9\s]", " ", t.lower())
+            return re.sub(r"\s+", "-", t.strip()).strip("-")
+
+        def _drop_brand(slug):
+            if brand:
+                return re.sub(rf"^{re.escape(brand)}-", "", slug).strip("-")
+            return slug
+
+        # ── Step 1: sitemap fuzzy match ────────────────────────────────────────
+        sitemap_slugs = self._load_sitemap_catalogue()
+        if sitemap_slugs:
+            input_slug = _to_slug(search_term)
+            input_nb   = _drop_brand(input_slug)
+
+            # Keywords: meaningful words from the (no-brand, no-size) slug
+            stop = self._STOP_WORDS
+            input_words = set(
+                w for w in re.split(r"[^a-z0-9]+", input_nb)
+                if len(w) >= 3 and w not in stop
+            )
+
+            best_score, best_slug = 0.0, None
+            for slug in sitemap_slugs:
+                slug_nb = _drop_brand(slug)
+                fuzzy   = self._fuzzy_score(input_nb, slug_nb)
+                slug_words = set(re.split(r"[^a-z0-9]+", slug_nb))
+                kw = len(input_words & slug_words) / max(len(input_words), 1)
+                score = 0.5 * fuzzy + 0.5 * kw
+                if score > best_score:
+                    best_score, best_slug = score, slug
+
+            if best_slug and best_score >= 0.45:
+                url = f"{self.store_url}/products/{best_slug}"
+                try:
+                    r = self.session.head(url, timeout=8, allow_redirects=True)
+                    if r.status_code == 200:
+                        title = best_slug.replace("-", " ").title()
+                        return url, title, "HIGH", f"Sitemap match ({min(best_score,1.0):.0%})"
+                except Exception:
+                    pass
+
+        # ── Step 2: direct slug construction fallback ──────────────────────
+        no_size = re.sub(r"\b[\d.]+\s*(ml|oz|g|l|fl|mm|cm)\b", " ", search_term, flags=re.IGNORECASE)
         no_size = re.sub(r"\s+", " ", no_size).strip()
 
-        def _strip_brand(t):
+        def _drop_brand_str(t):
             if brand:
                 return re.sub(rf"^{re.escape(brand)}\s+", "", t, flags=re.IGNORECASE).strip()
             return t
 
-        # Try most specific → least specific
-        variants = [
-            search_term,           # full title + size
-            no_size,               # full title, no size
-            _strip_brand(search_term),    # no brand, with size
-            _strip_brand(no_size),        # no brand, no size
-        ]
+        def _make_slug(text):
+            t = re.sub(r"[^a-z0-9\s]", " ", text.lower())
+            return re.sub(r"\s+", "-", t.strip()).strip("-")
 
-        seen = set()
-        candidates = []
-        for v in variants:
-            slug = _make_slug(v)
-            url  = f"{self.store_url}/products/{slug}"
-            if slug and url not in seen:
-                seen.add(url)
-                candidates.append(url)
-
+        candidates = list(dict.fromkeys(
+            f"{self.store_url}/products/{_make_slug(v)}"
+            for v in [search_term, no_size, _drop_brand_str(search_term), _drop_brand_str(no_size)]
+            if v.strip()
+        ))
         for url in candidates:
             try:
-                resp = self.session.head(url, timeout=8, allow_redirects=True)
-                if resp.status_code == 200:
-                    matched_title = url.split("/products/")[-1].replace("-", " ").title()
-                    return url, matched_title, "HIGH", "Slug construction (verified 200)"
+                r = self.session.head(url, timeout=8, allow_redirects=True)
+                if r.status_code == 200:
+                    slug = url.split("/products/")[-1]
+                    return url, slug.replace("-", " ").title(), "HIGH", "Slug construction (verified 200)"
             except Exception:
                 continue
 
         tried = ", ".join(c.split("/products/")[-1] for c in candidates)
         return None, None, None, (
-            f"Slug construction failed (tried: {tried}) - "
+            f"No match found (sitemap fuzzy + slug construction tried: {tried}) -- "
             "add a direct URL in column C"
         )
 
-    # ── Non-Shopify discovery ─────────────────────────────────────────────────
+        # ── Non-Shopify discovery ─────────────────────────────────────────────────
 
     def _find_jina_product(self, search_term, upc=None, direct_url=None):
         if direct_url:
@@ -529,8 +583,6 @@ class ProductScraper:
                     if t:
                         content_parts.append(t)
             content = _clean_text("\n".join(content_parts).strip())
-            if content:
-                sections[header] = content
             if content:
                 sections[header] = content
 
