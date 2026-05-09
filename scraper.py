@@ -281,6 +281,69 @@ class ProductScraper:
             reason += f" (UPC {upc} not in catalogue)"
         return None, None, None, reason
 
+    # ── Shopify slug construction (blocked catalogue fallback) ────────────────
+
+    def _find_shopify_slug_product(self, search_term, upc=None, direct_url=None):
+        """
+        For Shopify stores where products.json is blocked.
+        Constructs candidate /products/{slug} URLs from the input title,
+        then fires HEAD requests to verify which one actually exists.
+        No catalogue, no search page, no Jina needed.
+        """
+        if direct_url:
+            return direct_url, search_term, "HIGH", "Direct URL provided"
+
+        def _make_slug(text):
+            t = text.lower()
+            t = re.sub(r"[^a-z0-9\s]", " ", t)
+            t = re.sub(r"\s+", "-", t.strip()).strip("-")
+            return t
+
+        brand = self.config.get("brand_name", "").strip().lower()
+
+        # Strip size suffix (189ml, 300ml, 6.7oz, etc.)
+        no_size = re.sub(
+            r"\b[\d.]+\s*(ml|oz|g|l|fl|mm|cm)\b", " ", search_term, flags=re.IGNORECASE
+        )
+        no_size = re.sub(r"\s+", " ", no_size).strip()
+
+        def _strip_brand(t):
+            if brand:
+                return re.sub(rf"^{re.escape(brand)}\s+", "", t, flags=re.IGNORECASE).strip()
+            return t
+
+        # Try most specific → least specific
+        variants = [
+            search_term,           # full title + size
+            no_size,               # full title, no size
+            _strip_brand(search_term),    # no brand, with size
+            _strip_brand(no_size),        # no brand, no size
+        ]
+
+        seen = set()
+        candidates = []
+        for v in variants:
+            slug = _make_slug(v)
+            url  = f"{self.store_url}/products/{slug}"
+            if slug and url not in seen:
+                seen.add(url)
+                candidates.append(url)
+
+        for url in candidates:
+            try:
+                resp = self.session.head(url, timeout=8, allow_redirects=True)
+                if resp.status_code == 200:
+                    matched_title = url.split("/products/")[-1].replace("-", " ").title()
+                    return url, matched_title, "HIGH", "Slug construction (verified 200)"
+            except Exception:
+                continue
+
+        tried = ", ".join(c.split("/products/")[-1] for c in candidates)
+        return None, None, None, (
+            f"Slug construction failed (tried: {tried}) — "
+            "add a direct URL in column C"
+        )
+
     # ── Non-Shopify discovery ─────────────────────────────────────────────────
 
     def _find_jina_product(self, search_term, upc=None, direct_url=None):
@@ -295,19 +358,36 @@ class ProductScraper:
                 "Add a product URL in column C of your input file.",
             )
 
-        search_url = pattern.replace(
-            "{query}", requests.utils.quote(
-                re.sub(r"[^a-z0-9\s]", " ", search_term.lower()).strip()
-            )
-        )
+        # Strip volume/size suffixes before URL-encoding — many retailers
+        # (e.g. Sephora AU) return empty results when size info is in the query.
+        query_clean = re.sub(r"\b[\d.]+\s*(ml|oz|g|l|fl|mm|cm)\b", " ", search_term, flags=re.IGNORECASE)
+        query_clean = re.sub(r"[^a-z0-9\s]", " ", query_clean.lower())
+        query_clean = re.sub(r"\s+", " ", query_clean).strip()
+        search_url = pattern.replace("{query}", requests.utils.quote(query_clean))
         try:
             markdown = self._fetch_via_jina(search_url)
         except Exception as e:
             return None, None, None, f"Search page fetch failed: {e}"
 
-        links = re.findall(r"\[([^\]]+)\]\((https?://[^\)]+)\)", markdown)
-        if not links:
-            return None, None, None, "No product links found in search results"
+        # Extract all product URLs directly from the raw markdown text.
+        # This handles both:
+        #   - Standard links:  [Product Title](https://site.com/products/handle)
+        #   - Nested image-links used by Sephora AU and similar sites:
+        #       [![alt text](https://cdn.../image.jpg)](https://site.com/products/handle)
+        # The old [text](url) regex only captured the CDN image URL (inner parens)
+        # in the nested format, missing the actual product URL (outer parens entirely).
+        all_urls = re.findall(r"https?://[^\s\)\]\"'<>]+", markdown)
+        store_domain = urlparse(self.store_url).netloc  # e.g. www.sephora.com.au
+        _IMAGE_EXT = re.compile(r"\.(jpg|jpeg|png|gif|webp|svg|ico|avif)(\?|#|$)", re.IGNORECASE)
+        product_urls = list(dict.fromkeys(
+            u.rstrip(".,;") for u in all_urls
+            if "/products/" in u
+            and urlparse(u).netloc == store_domain   # same domain, not CDN
+            and not _IMAGE_EXT.search(u)             # not an image file
+        ))
+
+        if not product_urls:
+            return None, None, None, "No product links found in search results — add a direct URL in column C"
 
         def _title_to_slug(text):
             """Convert a product title to a URL-slug for comparison."""
@@ -326,9 +406,7 @@ class ProductScraper:
 
         # Score every /products/ URL by fuzzy-matching input slug against URL slug
         seen = {}
-        for text, url in links:
-            if "/products/" not in url:
-                continue
+        for url in product_urls:
             url_slug = _slug_from_url(url)
             if not url_slug:
                 continue
@@ -337,19 +415,20 @@ class ProductScraper:
             # Secondary: keyword overlap as tiebreaker
             kw_score   = self._keyword_score(search_term, url_slug.replace("-", " "))
             score      = 0.8 * slug_score + 0.2 * kw_score
-            if url not in seen or score > seen[url][0]:
-                seen[url] = (score, text)
+            if url not in seen or score > seen[url]:
+                seen[url] = score
 
         if not seen:
             return None, None, None, "No product links found in search results — add a direct URL in column C"
 
-        best_score, best_text, best_url = max(
-            [(s, t, u) for u, (s, t) in seen.items()], key=lambda x: x[0]
-        )
-        best_slug = _slug_from_url(best_url)
+        best_url   = max(seen, key=seen.get)
+        best_score = seen[best_url]
+        best_slug  = _slug_from_url(best_url)
+        # Derive a readable title from the URL slug (actual title scraped from product page later)
+        matched_title = best_slug.replace("-", " ").title()
 
         if best_score >= 0.65:
-            return best_url, best_text, "HIGH", f"Slug match ({min(best_score, 1.0):.0%})"
+            return best_url, matched_title, "HIGH", f"Slug match ({min(best_score, 1.0):.0%})"
 
         return None, None, None, f"No confident match (best slug: '{best_slug}' at {min(best_score, 1.0):.0%}) — add a direct URL in column C"
 
@@ -360,8 +439,12 @@ class ProductScraper:
             # Full Shopify catalogue available — use fast in-memory matching
             return self._find_shopify_product(search_term, upc)
         elif self.is_shopify:
-            # Shopify detected but products.json is blocked — fall back to Jina search
-            # Auto-build search URL using the store's native Shopify search endpoint
+            # Shopify detected but products.json is blocked.
+            # Step 1: try slug construction — fast, no search page needed.
+            result = self._find_shopify_slug_product(search_term, upc, direct_url)
+            if result[0]:
+                return result
+            # Step 2: fall back to Jina search as last resort.
             auto_pattern = f"{self.store_url}/search?q={{query}}&type=product"
             config_with_search = {**self.config, "search_url_pattern": auto_pattern}
             original_config = self.config
